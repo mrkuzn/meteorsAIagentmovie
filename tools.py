@@ -39,14 +39,30 @@ def _client() -> QdrantClient:
 
 # ------------------------------------------------------------- форматирование -
 def _short(payload: dict) -> str:
-    """Краткая строка фильма для списков (с ID, чтобы агент мог уточнить)."""
+    """Краткая строка фильма для списков (по названию — без числовых ID)."""
     genres = ", ".join(payload.get("genres") or [])
     rating = payload.get("rating")
     rating_s = f"★{rating}" if rating else "★—"
     return (
-        f"[ID {payload['id']}] {payload['title']} ({payload.get('year') or '—'}) "
-        f"{rating_s} | {genres}"
+        f"{payload['title']} ({payload.get('year') or '—'}) {rating_s} | {genres}"
     )
+
+
+def _resolve(title: str):
+    """Найти фильм по названию: сначала точное совпадение, иначе — семантически ближайший."""
+    pts, _ = _client().scroll(
+        COLLECTION,
+        scroll_filter=Filter(must=[FieldCondition(key="title", match=MatchValue(value=title))]),
+        limit=1,
+        with_payload=True,
+        with_vectors=True,
+    )
+    if pts:
+        return pts[0]
+    hits = _client().query_points(
+        COLLECTION, query=embed_query(title), limit=1, with_payload=True, with_vectors=True
+    ).points
+    return hits[0] if hits else None
 
 
 def _full(payload: dict) -> str:
@@ -55,7 +71,7 @@ def _full(payload: dict) -> str:
         return ", ".join(payload.get(key) or []) or "—"
 
     return (
-        f"[ID {payload['id']}] {payload['title']}"
+        f"{payload['title']}"
         + (f" / {payload['original_title']}" if payload.get("original_title") else "")
         + f"\nГод: {payload.get('year') or '—'}"
         f"\nЖанры: {join('genres')}"
@@ -88,7 +104,8 @@ def search_content(
       genre — точный жанр на русском (например «комедия», «драма», «фантастика»);
       min_rating — минимальный рейтинг (0 = любой);
       limit — сколько результатов вернуть (по умолчанию 5).
-    Возвращает список фильмов с их ID (по ID можно запросить детали или похожие).
+    Возвращает список фильмов (название, год, рейтинг, жанры). По названию фильма
+    можно затем запросить детали (get_details) или похожие (find_similar).
     """
     conditions: list = []
     if year_from or year_to:
@@ -116,38 +133,37 @@ def search_content(
 
 
 @tool
-def get_details(movie_id: int) -> str:
-    """Полная карточка фильма по его ID из базы.
+def get_details(title: str) -> str:
+    """Полная карточка фильма по его НАЗВАНИЮ из базы.
 
     Используй, когда нужно подробно рассказать про конкретный фильм или ответить
     на уточняющий вопрос (режиссёр, актёры, длительность, рейтинг, описание).
-    ID берётся из результатов search_content или find_similar.
+    Передавай точное название фильма из результатов search_content или find_similar.
     """
-    res = _client().retrieve(COLLECTION, ids=[movie_id], with_payload=True)
-    if not res:
-        return f"Фильм с ID {movie_id} не найден."
-    return _full(res[0].payload)
+    p = _resolve(title)
+    if not p:
+        return f"Фильм «{title}» в базе не найден."
+    return _full(p.payload)
 
 
 @tool
-def find_similar(movie_id: int, limit: int = 5) -> str:
-    """Найти фильмы, похожие на фильм с заданным ID (по смыслу/вектору).
+def find_similar(title: str, limit: int = 5) -> str:
+    """Найти фильмы, похожие на заданный фильм (по смыслу/вектору).
 
     Используй для запросов «понравился вот этот — что ещё посмотреть»,
-    «хочу что-то похожее». ID берётся из предыдущих результатов.
+    «хочу что-то похожее». Передавай точное название фильма-образца.
     """
-    res = _client().retrieve(COLLECTION, ids=[movie_id], with_vectors=True, with_payload=True)
-    if not res:
-        return f"Фильм с ID {movie_id} не найден."
-    vector = res[0].vector
+    p = _resolve(title)
+    if not p:
+        return f"Фильм «{title}» в базе не найден."
     hits = _client().query_points(
         COLLECTION,
-        query=vector,
-        query_filter=Filter(must_not=[HasIdCondition(has_id=[movie_id])]),
+        query=p.vector,
+        query_filter=Filter(must_not=[HasIdCondition(has_id=[p.id])]),
         limit=limit,
         with_payload=True,
     ).points
-    base = res[0].payload["title"]
+    base = p.payload["title"]
     if not hits:
         return f"Похожих на «{base}» не нашлось."
     return f"Похожие на «{base}»:\n" + "\n".join(_short(h.payload) for h in hits)

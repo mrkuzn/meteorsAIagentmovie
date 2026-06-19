@@ -16,7 +16,6 @@
 from __future__ import annotations
 
 import csv
-import hashlib
 import sys
 
 from qdrant_client import QdrantClient
@@ -74,11 +73,6 @@ def build_text(row: dict) -> str:
     return ". ".join(parts)
 
 
-def stable_id(url: str) -> int:
-    """Детерминированный ID фильма из его url (одинаков при любых пересборках/слияниях)."""
-    return int(hashlib.md5(url.encode("utf-8")).hexdigest()[:15], 16)
-
-
 def build_payload(idx: int, row: dict) -> dict:
     """Всё, что нужно для get_details и фильтрации — в payload."""
     return {
@@ -119,11 +113,11 @@ def index() -> None:
         vectors = embed_passages([build_text(r) for r in chunk])
         points = [
             PointStruct(
-                id=(mid := stable_id(row["url"])),
+                id=start + i,
                 vector=vec,
-                payload=build_payload(mid, row),
+                payload=build_payload(start + i, row),
             )
-            for row, vec in zip(chunk, vectors)
+            for i, (row, vec) in enumerate(zip(chunk, vectors))
         ]
         client.upsert(COLLECTION, points=points)
 
