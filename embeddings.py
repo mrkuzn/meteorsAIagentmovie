@@ -17,12 +17,17 @@ os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS", "1")
 
 from functools import lru_cache  # noqa: E402
 
-from fastembed import TextEmbedding  # noqa: E402
+from fastembed import SparseTextEmbedding, TextEmbedding  # noqa: E402
 
 EMBED_MODEL = os.getenv("EMBED_MODEL", "intfloat/multilingual-e5-large")
 VECTOR_SIZE = 1024  # размерность multilingual-e5-large
 DB_PATH = os.path.join("data", "db")
 COLLECTION = "movies"
+
+# Имена векторов в коллекции (гибридный поиск): плотный e5 + разреженный BM25.
+DENSE_NAME = "dense"
+SPARSE_NAME = "bm25"
+SPARSE_MODEL = "Qdrant/bm25"  # лексика: токенизация + IDF, считается на CPU мгновенно
 
 # Локальная распакованная модель (tar с Google CDN). Если папка есть — грузим из неё
 # (плоские файлы, без симлинков). Если нет — fastembed скачает сам (см. фикс выше).
@@ -38,11 +43,34 @@ def _model() -> TextEmbedding:
 
 
 def embed_passages(texts: list[str]) -> list[list[float]]:
-    """Векторы для документов (с префиксом 'passage: ')."""
+    """Плотные векторы документов (с префиксом 'passage: ')."""
     docs = [f"passage: {t}" for t in texts]
     return [v.tolist() for v in _model().embed(docs)]
 
 
 def embed_query(text: str) -> list[float]:
-    """Вектор для поискового запроса (с префиксом 'query: ')."""
+    """Плотный вектор поискового запроса (с префиксом 'query: ')."""
     return next(iter(_model().embed([f"query: {text}"]))).tolist()
+
+
+# --------------------------------------------------------- разреженный BM25 ---
+@lru_cache(maxsize=1)
+def _sparse_model() -> SparseTextEmbedding:
+    """BM25 с русским стеммингом/стоп-словами. Лёгкий, грузится быстро."""
+    return SparseTextEmbedding(model_name=SPARSE_MODEL, language="russian")
+
+
+def embed_sparse_passages(texts: list[str]) -> list[tuple[list[int], list[float]]]:
+    """Разреженные BM25-векторы документов: список (indices, values).
+
+    values — частоты термов; IDF Qdrant добавит сам при поиске (Modifier.IDF).
+    """
+    return [
+        (e.indices.tolist(), e.values.tolist()) for e in _sparse_model().embed(texts)
+    ]
+
+
+def embed_sparse_query(text: str) -> tuple[list[int], list[float]]:
+    """Разреженный BM25-вектор запроса: (indices, values)."""
+    e = next(iter(_sparse_model().query_embed(text)))
+    return e.indices.tolist(), e.values.tolist()

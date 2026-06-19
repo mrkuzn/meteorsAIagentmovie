@@ -1,13 +1,14 @@
 """
 Инструменты агента Find My Movie (4 шт, как требует README).
 
-  search_content — семантический поиск по базе (+ опциональные фильтры)
-  get_details    — полная карточка фильма по ID
-  find_similar   — похожие фильмы по ID
+  search_content — гибридный поиск по базе (семантика e5 + лексика BM25, RRF) + фильтры
+  get_details    — полная карточка фильма по названию
+  find_similar   — похожие фильмы по названию
   web_search     — отзывы/свежая инфа через Tavily
 
 Все инструменты работают поверх локальной базы Qdrant (data/db/), собранной indexer.py.
-Поиск использует тот же эмбеддер e5-large (embeddings.embed_query, префикс 'query:').
+Семантика — эмбеддер e5-large (embeddings.embed_query, префикс 'query:'),
+лексика — BM25 (embeddings.embed_sparse_query); слияние рейтингов через RRF в Qdrant.
 """
 
 from __future__ import annotations
@@ -21,12 +22,23 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import (
     FieldCondition,
     Filter,
+    Fusion,
+    FusionQuery,
     HasIdCondition,
     MatchValue,
+    Prefetch,
     Range,
+    SparseVector,
 )
 
-from embeddings import COLLECTION, DB_PATH, embed_query
+from embeddings import (
+    COLLECTION,
+    DB_PATH,
+    DENSE_NAME,
+    SPARSE_NAME,
+    embed_query,
+    embed_sparse_query,
+)
 
 load_dotenv()
 
@@ -60,7 +72,12 @@ def _resolve(title: str):
     if pts:
         return pts[0]
     hits = _client().query_points(
-        COLLECTION, query=embed_query(title), limit=1, with_payload=True, with_vectors=True
+        COLLECTION,
+        query=embed_query(title),
+        using=DENSE_NAME,
+        limit=1,
+        with_payload=True,
+        with_vectors=True,
     ).points
     return hits[0] if hits else None
 
@@ -95,10 +112,11 @@ def search_content(
     min_rating: float = 0.0,
     limit: int = 5,
 ) -> str:
-    """Семантический поиск фильмов по смысловому описанию запроса.
+    """Гибридный поиск фильмов: смысл (семантика) + точные слова (лексика BM25).
 
     Используй для запросов вида «хочу что-то про одиночество в мегаполисе»,
-    «напряжённый триллер про выживание», «лёгкое и смешное на вечер».
+    «напряжённый триллер про выживание», «лёгкое и смешное на вечер», а также
+    когда в запросе есть конкретные слова — имя актёра/режиссёра, точное название.
     Опциональные фильтры:
       year_from / year_to — диапазон годов (0 = без ограничения);
       genre — точный жанр на русском (например «комедия», «драма», «фантастика»);
@@ -120,10 +138,23 @@ def search_content(
         conditions.append(FieldCondition(key="rating", range=Range(gte=min_rating)))
     qfilter = Filter(must=conditions) if conditions else None
 
+    # каждая ветвь берёт пошире, RRF сливает два рейтинга в один итоговый список
+    pool = max(limit * 4, 20)
+    s_idx, s_val = embed_sparse_query(query)
     hits = _client().query_points(
         COLLECTION,
-        query=embed_query(query),
-        query_filter=qfilter,
+        prefetch=[
+            Prefetch(
+                query=embed_query(query), using=DENSE_NAME, filter=qfilter, limit=pool
+            ),
+            Prefetch(
+                query=SparseVector(indices=s_idx, values=s_val),
+                using=SPARSE_NAME,
+                filter=qfilter,
+                limit=pool,
+            ),
+        ],
+        query=FusionQuery(fusion=Fusion.RRF),
         limit=limit,
         with_payload=True,
     ).points
@@ -158,7 +189,8 @@ def find_similar(title: str, limit: int = 5) -> str:
         return f"Фильм «{title}» в базе не найден."
     hits = _client().query_points(
         COLLECTION,
-        query=p.vector,
+        query=p.vector[DENSE_NAME],
+        using=DENSE_NAME,
         query_filter=Filter(must_not=[HasIdCondition(has_id=[p.id])]),
         limit=limit,
         with_payload=True,
@@ -201,9 +233,9 @@ ALL_TOOLS = [search_content, get_details, find_similar, web_search]
 
 if __name__ == "__main__":
     # быстрый тест инструментов (только когда app.py не запущен — база эксклюзивна)
-    print("== search_content ==")
+    print("== search_content (гибрид) ==")
     print(search_content.invoke({"query": "напряжённое выживание в космосе", "limit": 3}))
-    print("\n== get_details (первый id из поиска) ==")
-    print(get_details.invoke({"movie_id": 0}))
-    print("\n== find_similar ==")
-    print(find_similar.invoke({"movie_id": 0, "limit": 3}))
+    print("\n== get_details (по названию) ==")
+    print(get_details.invoke({"title": "Дурак"}))
+    print("\n== find_similar (по названию) ==")
+    print(find_similar.invoke({"title": "Дурак", "limit": 3}))

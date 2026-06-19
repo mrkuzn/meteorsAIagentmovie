@@ -19,16 +19,26 @@ import csv
 import sys
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, PointStruct, VectorParams
+from qdrant_client.models import (
+    Distance,
+    Modifier,
+    PointStruct,
+    SparseVector,
+    SparseVectorParams,
+    VectorParams,
+)
 from tqdm import tqdm
 
 from embeddings import (
     COLLECTION,
     DB_PATH,
+    DENSE_NAME,
     EMBED_MODEL,
+    SPARSE_NAME,
     VECTOR_SIZE,
     embed_passages,
     embed_query,
+    embed_sparse_passages,
 )
 
 RAW_CSV = "data/raw.csv"
@@ -66,6 +76,8 @@ def build_text(row: dict) -> str:
         parts.append("Жанры: " + row["genres"])
     if row["director"]:
         parts.append("Режиссёр: " + row["director"])
+    if row["cast"]:
+        parts.append("В ролях: " + row["cast"])
     if row["country"]:
         parts.append("Страна: " + row["country"])
     if row["description"]:
@@ -105,19 +117,26 @@ def index() -> None:
         client.delete_collection(COLLECTION)
     client.create_collection(
         COLLECTION,
-        vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
+        # гибрид: плотный e5 (косинус) + разреженный BM25 (IDF считает Qdrant)
+        vectors_config={DENSE_NAME: VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE)},
+        sparse_vectors_config={SPARSE_NAME: SparseVectorParams(modifier=Modifier.IDF)},
     )
 
     for start in tqdm(range(0, len(rows), BATCH), desc="Индексация", unit="batch"):
         chunk = rows[start : start + BATCH]
-        vectors = embed_passages([build_text(r) for r in chunk])
+        texts = [build_text(r) for r in chunk]
+        dense = embed_passages(texts)
+        sparse = embed_sparse_passages(texts)
         points = [
             PointStruct(
                 id=start + i,
-                vector=vec,
+                vector={
+                    DENSE_NAME: dvec,
+                    SPARSE_NAME: SparseVector(indices=idx, values=val),
+                },
                 payload=build_payload(start + i, row),
             )
-            for i, (row, vec) in enumerate(zip(chunk, vectors))
+            for i, (row, dvec, (idx, val)) in enumerate(zip(chunk, dense, sparse))
         ]
         client.upsert(COLLECTION, points=points)
 
@@ -127,15 +146,31 @@ def index() -> None:
 
 
 def smoke_test(client: QdrantClient) -> None:
-    """Быстрая проверка, что семантический поиск реально работает."""
+    """Быстрая проверка, что гибридный поиск (dense + BM25) реально работает."""
+    from qdrant_client.models import Fusion, FusionQuery, Prefetch, SparseVector
+
+    from embeddings import embed_sparse_query
+
     queries = [
         "напряжённое выживание в космосе",
         "лёгкая романтическая комедия на вечер",
     ]
-    print("\n--- smoke-test семантического поиска ---")
+    print("\n--- smoke-test гибридного поиска (dense + BM25, RRF) ---")
     for q in queries:
+        s_idx, s_val = embed_sparse_query(q)
         hits = client.query_points(
-            COLLECTION, query=embed_query(q), limit=3, with_payload=True
+            COLLECTION,
+            prefetch=[
+                Prefetch(query=embed_query(q), using=DENSE_NAME, limit=20),
+                Prefetch(
+                    query=SparseVector(indices=s_idx, values=s_val),
+                    using=SPARSE_NAME,
+                    limit=20,
+                ),
+            ],
+            query=FusionQuery(fusion=Fusion.RRF),
+            limit=3,
+            with_payload=True,
         ).points
         print(f"\nЗапрос: «{q}»")
         for h in hits:
