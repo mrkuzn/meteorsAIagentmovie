@@ -58,7 +58,7 @@
 ├── tools.py             # 4 инструмента агента поверх Qdrant + Tavily
 ├── agent.py             # роутер + агент + память (классический LangChain)
 ├── app.py               # запуск: чат в терминале
-├── ui.py                # запуск: веб-интерфейс (Gradio)
+├── ui_streamlit.py      # запуск: веб-интерфейс (Streamlit, мультичат)
 ├── bot.py               # запуск: Telegram-бот
 ├── pyproject.toml       # зависимости (uv)
 └── .env.example         # шаблон ключей
@@ -111,7 +111,7 @@ uv run python indexer.py --check  # проверить, что в базе, бе
 
 ```bash
 uv run python app.py   # чат в терминале
-uv run python ui.py    # веб-интерфейс (откроется в браузере, :7860)
+uv run streamlit run ui_streamlit.py   # веб-интерфейс (откроется в браузере, :8501)
 uv run python bot.py   # Telegram-бот
 ```
 
