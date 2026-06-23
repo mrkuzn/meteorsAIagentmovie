@@ -17,10 +17,13 @@ from backend.tools import ALL_TOOLS
 load_dotenv()
 
 # --- Настройки провайдера Polza.ai ---
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://polza.ai")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL")
 LLM_API_KEY = os.getenv("LLM_API_KEY")
-LLM_MODEL = os.getenv("LLM_MODEL", "deepseek/deepseek-v4-flash")
-ROUTER_MODEL = os.getenv("ROUTER_MODEL", "deepseek/deepseek-v4-flash")
+LLM_MODEL = os.getenv("LLM_MODEL")
+ROUTER_MODEL = os.getenv("ROUTER_MODEL")
+
+
+
 
 # --- 1. Определение состояния графа ---
 class AgentState(TypedDict):

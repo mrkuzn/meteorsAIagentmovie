@@ -61,4 +61,5 @@ if __name__ == "__main__":
     # Получаем порт из переменных окружения (Selectel), по умолчанию 8000
     port = int(os.getenv("PORT", 8000))
     # Запускаем uvicorn-сервер на хосте 0.0.0.0, чтобы он был доступен извне
-    uvicorn.run("main import app", host="0.0.0.0", port=port, reload=True)
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=port, reload=True)
+

@@ -10,8 +10,8 @@ load_dotenv()
 
 # URL вашего FastAPI бэкенда в Selectel.
 # На локальной машине используется http://localhost:8000. 
-# При деплое в Streamlit Cloud этот IP прописывается в Advanced Settings -> Secrets.
-BACKEND_URL = st.secrets.get("BACKEND_URL", os.getenv("BACKEND_URL", "http://localhost:8000"))
+# При деплое в Streamlit Cloud этот IP прописывается в Advanced Settings -> Secrets.    
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 CHAT_ENDPOINT = f"{BACKEND_URL}/api/chat"
 
 st.set_page_config(page_title="Find My Movie", page_icon="🎬", layout="wide")
