@@ -44,7 +44,7 @@ from telegram.ext import (  # noqa: E402
     filters,
 )
 
-import agent  # noqa: E402
+import backend.agent as agent  # noqa: E402
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO
@@ -104,8 +104,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 def main() -> None:
     log.info("Прогрев эмбеддера и базы…")
     try:
-        from embeddings import COLLECTION, embed_query
-        from tools import _client
+        from backend.embeddings import COLLECTION, embed_query
+        from backend.tools import _client
 
         embed_query("прогрев")
         _client().count(COLLECTION)

@@ -1,0 +1,76 @@
+"""
+Общий слой эмбеддингов для проекта Find My Movie.
+
+Эмбеддер — multilingual-e5-large через fastembed (локально, без ключа).
+e5 требует префиксы: документы кодируются как 'passage: ...', запросы как 'query: ...'.
+Один источник правды и для indexer.py, и для tools.py — чтобы не разъехались.
+"""
+
+from __future__ import annotations
+
+import os
+
+# Фикс загрузки больших ONNX-моделей (e5-large >2ГБ хранит веса в model.onnx_data):
+# новый onnxruntime отказывается читать external data через симлинки HF-кэша.
+# Реальные файлы вместо симлинков снимают проблему. Ставим ДО импорта fastembed.
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS", "1")
+
+from functools import lru_cache  # noqa: E402
+
+from fastembed import SparseTextEmbedding, TextEmbedding  # noqa: E402
+
+EMBED_MODEL = os.getenv("EMBED_MODEL", "intfloat/multilingual-e5-large")
+VECTOR_SIZE = 1024  # размерность multilingual-e5-large
+DB_PATH = os.path.join("data", "db")
+COLLECTION = "movies"
+
+# Имена векторов в коллекции (гибридный поиск): плотный e5 + разреженный BM25.
+DENSE_NAME = "dense"
+SPARSE_NAME = "bm25"
+SPARSE_MODEL = "Qdrant/bm25"  # лексика: токенизация + IDF, считается на CPU мгновенно
+
+# Локальная распакованная модель (tar с Google CDN). Если папка есть — грузим из неё
+# (плоские файлы, без симлинков). Если нет — fastembed скачает сам (см. фикс выше).
+LOCAL_MODEL_PATH = os.getenv("EMBED_LOCAL_PATH", "models/fast-multilingual-e5-large")
+
+
+@lru_cache(maxsize=1)
+def _model() -> TextEmbedding:
+    """Ленивая загрузка модели. Локальная папка -> без скачивания; иначе скачает ~2.2 ГБ."""
+    if os.path.isdir(LOCAL_MODEL_PATH):
+        return TextEmbedding(model_name=EMBED_MODEL, specific_model_path=LOCAL_MODEL_PATH)
+    return TextEmbedding(model_name=EMBED_MODEL)
+
+
+def embed_passages(texts: list[str]) -> list[list[float]]:
+    """Плотные векторы документов (с префиксом 'passage: ')."""
+    docs = [f"passage: {t}" for t in texts]
+    return [v.tolist() for v in _model().embed(docs)]
+
+
+def embed_query(text: str) -> list[float]:
+    """Плотный вектор поискового запроса (с префиксом 'query: ')."""
+    return next(iter(_model().embed([f"query: {text}"]))).tolist()
+
+
+# --------------------------------------------------------- разреженный BM25 ---
+@lru_cache(maxsize=1)
+def _sparse_model() -> SparseTextEmbedding:
+    """BM25 с русским стеммингом/стоп-словами. Лёгкий, грузится быстро."""
+    return SparseTextEmbedding(model_name=SPARSE_MODEL, language="russian")
+
+
+def embed_sparse_passages(texts: list[str]) -> list[tuple[list[int], list[float]]]:
+    """Разреженные BM25-векторы документов: список (indices, values).
+
+    values — частоты термов; IDF Qdrant добавит сам при поиске (Modifier.IDF).
+    """
+    return [
+        (e.indices.tolist(), e.values.tolist()) for e in _sparse_model().embed(texts)
+    ]
+
+
+def embed_sparse_query(text: str) -> tuple[list[int], list[float]]:
+    """Разреженный BM25-вектор запроса: (indices, values)."""
+    e = next(iter(_sparse_model().query_embed(text)))
+    return e.indices.tolist(), e.values.tolist()

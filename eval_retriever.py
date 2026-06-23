@@ -36,7 +36,7 @@ from qdrant_client.models import (
     VectorParams,
 )
 
-from embeddings import (
+from backend.embeddings import (
     COLLECTION,
     DENSE_NAME,
     SPARSE_NAME,
@@ -46,7 +46,7 @@ from embeddings import (
     embed_sparse_passages,
     embed_sparse_query,
 )
-from indexer import RAW_CSV, build_payload, build_text
+from backend.indexer import RAW_CSV, build_payload, build_text
 
 K = 5
 SEED = 42

@@ -23,7 +23,7 @@ def main() -> None:
         sys.exit("Не задан LLM_API_KEY в .env — без него голова не отвечает.")
 
     # импорт после проверки ключа (agent.py поднимает модели и базу)
-    from agent import respond
+    from backend.agent import respond
 
     print("🎬 Find My Movie — консультант по фильмам.")
     print("   Спрашивай что посмотреть, проси детали или похожее. 'выход' — закончить.\n")
